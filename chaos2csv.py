@@ -94,13 +94,6 @@ with st.sidebar:
         Passionate about turning data chaos into clarity, with a focus on building smarter solutions through data.
     """)
 
-# Main content
-st.write(""" 
-    Welcome to chaos2csv, where we decode the data labyrinth and transform chaotic JSON structures into structured CSV formats.
-    With an analytical precision, we break down every intricate layer and convert it into the clarity of a CSV file.
-    Upload your JSON file, and let chaos2csv orchestrate a seamless transformation, making sense out of even the wildest data.
-""")
-
 # File upload
 uploaded_file = st.file_uploader("Choose a JSON file", type=["json"])
 
