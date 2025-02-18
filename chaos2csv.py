@@ -1,14 +1,9 @@
 import json
 import pandas as pd
-import io
-import requests
 import streamlit as st
-import uvicorn
-from threading import Thread
-from fastapi import FastAPI, File, UploadFile, HTTPException
+import io
 
-app = FastAPI()
-
+# Function to flatten nested JSON
 def flatten_json(data, parent_key='', sep='_'):
     """Recursively flattens a nested JSON object into a single-level dictionary."""
     items = {}
@@ -27,114 +22,98 @@ def flatten_json(data, parent_key='', sep='_'):
                 items[new_key] = value if value is not None else '*'
     return items
 
-@app.post("/convert/")
-async def convert_file(file: UploadFile = File(...)):
-    """Handles JSON to CSV conversion with improved edge-case handling."""
-    try:
-        contents = await file.read()
-        if not contents.strip():
-            raise HTTPException(status_code=400, detail="Empty file uploaded.")
+# Function to convert JSON to DataFrame
+def convert_json_to_csv(json_data):
+    """Converts JSON data into a structured CSV-compatible format."""
+    expanded_data = []
 
-        try:
-            json_data = json.loads(contents)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON: {str(e)}")
+    if isinstance(json_data, dict):
+        if all(isinstance(v, list) for v in json_data.values()):
+            if not any(json_data.values()):
+                st.error("JSON contains only empty lists.")
+                return None
+            
+            max_length = max(len(v) for v in json_data.values())
 
-        if not json_data:
-            raise HTTPException(status_code=400, detail="Empty JSON content.")
+            for idx in range(max_length):
+                row = {}
+                for key, value in json_data.items():
+                    if isinstance(value, list) and len(value) > idx:
+                        item = value[idx]
+                        row.update(flatten_json(item, key) if isinstance(item, dict) else {key: item})
+                    else:
+                        row[key] = '*'
+                expanded_data.append(row)
+        else:
+            expanded_data.append(flatten_json(json_data))  # Handle normal dict
 
-        expanded_data = []
+    elif isinstance(json_data, list):
+        if all(isinstance(entry, dict) for entry in json_data):
+            expanded_data = [flatten_json(entry) for entry in json_data]
+        else:
+            st.error("Each JSON entry must be a dictionary.")
+            return None
 
-        if isinstance(json_data, dict):
-            if all(isinstance(v, list) for v in json_data.values()):  
-                if not any(json_data.values()):
-                    raise HTTPException(status_code=400, detail="JSON contains only empty lists.")
-                
-                max_length = max(len(v) for v in json_data.values())
-                
-                for idx in range(max_length):
-                    row = {}
-                    for key, value in json_data.items():
-                        if isinstance(value, list) and len(value) > idx:
-                            item = value[idx]
-                            row.update(flatten_json(item, key) if isinstance(item, dict) else {key: item})
-                        else:
-                            row[key] = '*'
-                    expanded_data.append(row)
-            else:
-                expanded_data.append(flatten_json(json_data))  # Handle normal dict
+    df = pd.DataFrame(expanded_data).fillna('*')
 
-        elif isinstance(json_data, list):
-            if all(isinstance(entry, dict) for entry in json_data):  
-                expanded_data = [flatten_json(entry) for entry in json_data]
-            else:
-                raise HTTPException(status_code=400, detail="Each JSON entry must be a dictionary.")
+    # Convert numeric columns
+    for col in df.columns:
+        if df[col].dtype == 'object':  # If column type is string
+            df[col] = df[col].replace('*', pd.NA)  # Replace '*' with NaN
+            try:
+                df[col] = pd.to_numeric(df[col])  # Convert valid numbers
+            except ValueError:
+                pass  # Keep non-numeric values as they are
 
-        df = pd.DataFrame(expanded_data).fillna('*')
-
-        csv_buffer = io.StringIO()
-        df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
-
-        return {"filename": file.filename, "csv_data": csv_buffer.getvalue()}
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Server error: {str(e)}")
-
-# Start FastAPI backend in a separate thread
-def run_backend():
-    uvicorn.run(app, host="127.0.0.1", port=8000)
-Thread(target=run_backend, daemon=True).start()
+    return df
 
 # Streamlit UI
-st.title("chaos2csv: Unleashing Order from the Chaos of Data")
+st.title("chaos2csv: Convert JSON to CSV")
 
 with st.sidebar:
     st.title("chaos2csv")
     st.write("""
         **Unleashing Order from the Chaos of Data**
-
-        chaos2csv simplifies the transformation of complex JSON data into structured CSV files.
-        It handles nested, unorganized data and converts it into a neat, readable format.
+        
+        Easily convert complex JSON files into clean CSV format.
     """)
     
     st.subheader("Key Features:")
     st.write("""
-        - **Raw to Refined:** Convert raw JSON into structured CSV.
-        - **Seamless Conversion:** Handles deeply nested JSON effortlessly.
-        - **Instant Preview & Download:** Real-time preview and easy downloads.
-        - **AI-Driven Structure:** Automatically detects and flattens nested data.
+        - **Handles Nested JSON**
+        - **Smart Data Flattening**
+        - **Instant CSV Preview**
+        - **Downloadable CSV File**
     """)
     
     st.subheader("About the Author:")
     st.write("""
-        **Tanvir Anzum** – Data Analyst  
+        **Tanvir Anzum** – Data & AI Specialist  
         Passionate about transforming chaotic data into meaningful insights.
     """)
 
+# File upload section
 uploaded_file = st.file_uploader("Choose a JSON file", type=["json"])
 
 if uploaded_file is not None:
-    file_data = uploaded_file.getvalue()
-    files = {'file': ('file.json', file_data, 'application/json')}
-    
-    response = requests.post("http://127.0.0.1:8000/convert/", files=files)
-    
-    if response.status_code == 200:
-        result = response.json()
-        filename = result['filename']
-        csv_data = result['csv_data']
-        df = pd.read_csv(io.StringIO(csv_data))
+    try:
+        json_data = json.load(uploaded_file)
+        df = convert_json_to_csv(json_data)
         
-        st.subheader("Preview of Converted CSV:")
-        st.dataframe(df)
+        if df is not None:
+            st.subheader("Preview of Converted CSV:")
+            st.dataframe(df)
 
-        st.download_button(
-            label="Download CSV file",
-            data=csv_data,
-            file_name=f"{filename}.csv",
-            mime="text/csv"
-        )
-    else:
-        st.error(f"Error: {response.status_code} - {response.text}")
+            csv_buffer = io.StringIO()
+            df.to_csv(csv_buffer, index=False, encoding='utf-8-sig')
+
+            st.download_button(
+                label="Download CSV file",
+                data=csv_buffer.getvalue(),
+                file_name="converted_data.csv",
+                mime="text/csv"
+            )
+    except json.JSONDecodeError:
+        st.error("Invalid JSON file. Please upload a valid JSON.")
+    except Exception as e:
+        st.error(f"An error occurred: {str(e)}")
